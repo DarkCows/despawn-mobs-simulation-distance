@@ -5,7 +5,6 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -24,36 +23,57 @@ public abstract class MobEntityMixin extends Entity {
         super(type, world);
     }
 
+    // idk why
+    @Unique
+    private static int cachedMaxDistanceSquared = -1;
+
+    @Unique
+    private static int cachedSimulationDistance = -1;
+
     /**
-     * Discard hostile mob entity
+     * Discard hostile mob entity if it is outside of simulation distance radius
      */
     @Inject(
-            method = "checkDespawn",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/SpawnGroup;getDespawnStartRange()I")
+        method = "checkDespawn",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/entity/SpawnGroup;getDespawnStartRange()I"
+        )
     )
-    private void despawnPastSimulationDistance(CallbackInfo ci, @Local Entity entity) {
-        // get the simulation distance
-        final MinecraftServer minecraftServer = entity.getEntityWorld().getServer();
+    private final void despawnPastSimulationDistance(
+        CallbackInfo ci,
+        @Local Entity entity
+    ) {
+        // get minecraft server
+        final MinecraftServer minecraftServer = entity
+            .getEntityWorld()
+            .getServer();
         if (minecraftServer == null) return;
-        final int simulationDistance = minecraftServer.getPlayerManager().getSimulationDistance();
 
-        // calculate despawn radius based on simulation distance
-        final int maxDespawnDistance = simulationDistance * 16;
+        // calculate difference of coords between player and mob
+        final double dx = entity.getX() - this.getX();
+        final double dz = entity.getZ() - this.getZ();
 
-        // get the distance between player and mob
-        final double groundSquareDistance = groundSquareDistanceTo(this.getEntityPos(), entity.getEntityPos());
+        // get the simulation distance
+        final int simulationDistance = minecraftServer
+            .getPlayerManager()
+            .getSimulationDistance();
+
+        // if simulation distance has changed, recalculate despawn radius
+        if (simulationDistance != cachedSimulationDistance) {
+            // calculate despawn radius based on simulation distance
+            final int maxDespawnDistance = simulationDistance << 4;
+            cachedSimulationDistance = simulationDistance;
+            cachedMaxDistanceSquared = maxDespawnDistance * maxDespawnDistance;
+        }
+
+        // calculate the squared distance between player and mob
+        final double groundSquareDistance = dx * dx + dz * dz;
 
         // remove mob if it is outside of simulation distance radius
-        if (groundSquareDistance > maxDespawnDistance * maxDespawnDistance && this.canImmediatelyDespawn(groundSquareDistance)) this.discard();
-    }
-
-    /**
-     * gets the distance squared between two entities not counting elevation/y distance
-     */
-    @Unique
-    private double groundSquareDistanceTo(Vec3d entityPos1, Vec3d entityPos2) {
-        final double x = entityPos2.x - entityPos1.x;
-        final double z = entityPos2.z - entityPos1.z;
-        return x * x + z * z;
+        if (
+            groundSquareDistance > cachedMaxDistanceSquared &&
+            this.canImmediatelyDespawn(groundSquareDistance)
+        ) this.discard();
     }
 }
